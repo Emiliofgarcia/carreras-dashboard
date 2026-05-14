@@ -1,8 +1,7 @@
 # Credenciales y configuración sensible
 config.py
 
-# Base de datos
-*.db
+# Base de datos — carreras.db se versiona (GitHub Actions la necesita)
 *_backup_*.db
 
 # Python

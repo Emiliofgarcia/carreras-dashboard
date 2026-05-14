@@ -1,0 +1,61 @@
+name: Sync Strava & Update Dashboard
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 6:00 UTC = 7h España (invierno) / 8h (verano)
+  workflow_dispatch:        # botón manual en GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate config.py from secrets
+        run: |
+          cat > config.py << 'PYEOF'
+          import os
+          CLIENT_ID     = os.environ['STRAVA_CLIENT_ID']
+          CLIENT_SECRET = os.environ['STRAVA_CLIENT_SECRET']
+          REFRESH_TOKEN = os.environ['STRAVA_REFRESH_TOKEN']
+          DB_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'carreras.db')
+          PYEOF
+        env:
+          STRAVA_CLIENT_ID:     ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+
+      - name: Sync Strava → DB
+        run: python sync_strava.py
+        env:
+          STRAVA_CLIENT_ID:     ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+
+      - name: Generate dashboard
+        run: python generar_dashboard.py
+        env:
+          STRAVA_CLIENT_ID:     ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+
+      - name: Commit & push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add carreras.db index.html
+          git diff --staged --quiet || git commit -m "Sync $(date +'%Y-%m-%d %H:%M UTC')"
+          git push

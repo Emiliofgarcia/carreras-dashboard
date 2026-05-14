@@ -6,12 +6,20 @@ incluyendo FC, calorías y ciudad para cada actividad.
 Hace un backup de la BD antes de recrearla.
 Al finalizar regenera el dashboard.
 """
+import os, sys
+
+# Fix SSL cert verification en Python 3.14 Windows
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE",       certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE",  certifi.where())
+except ImportError:
+    pass
+
 import requests
 import sqlite3
 import shutil
 import subprocess
-import sys
-import os
 from datetime import datetime
 
 sys.path.insert(0, r"D:\BackUp Emi\Code\StravaApi")
@@ -87,7 +95,8 @@ def resync():
             fc_media      REAL,
             fc_max        REAL,
             calorias      REAL,
-            ciudad        TEXT
+            ciudad        TEXT,
+            polyline      TEXT
         )
     """)
 
@@ -108,8 +117,8 @@ def resync():
         conn.execute("""
             INSERT OR REPLACE INTO carreras
                 (id, fecha, nombre, distancia_km, tiempo_min, ritmo_min_km,
-                 velocidad_kmh, desnivel_m, fc_media, fc_max, calorias, ciudad)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 velocidad_kmh, desnivel_m, fc_media, fc_max, calorias, ciudad, polyline)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             a["id"],
             a["start_date_local"][:10],
@@ -122,7 +131,8 @@ def resync():
             fc,
             a.get("max_heartrate"),
             a.get("calories"),
-            a.get("location_city") or ""
+            a.get("location_city") or "",
+            (a.get("map") or {}).get("summary_polyline") or ""
         ))
         insertadas += 1
         if fc:

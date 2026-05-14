@@ -3,6 +3,22 @@ import json
 import config
 from datetime import date, timedelta
 
+def decode_polyline_first(poly):
+    """Devuelve (lat, lng) del primer punto de un Google Encoded Polyline."""
+    if not poly:
+        return None, None
+    idx = 0
+    vals = []
+    for _ in range(2):
+        shift = result = 0
+        while idx < len(poly):
+            b = ord(poly[idx]) - 63; idx += 1
+            result |= (b & 0x1f) << shift; shift += 5
+            if b < 0x20:
+                break
+        vals.append(~(result >> 1) if result & 1 else result >> 1)
+    return round(vals[0] / 1e5, 5), round(vals[1] / 1e5, 5)
+
 def fmt_pace(p):
     if p is None: return "--:--"
     m = int(p); s = int(round((p - m) * 60))
@@ -171,29 +187,29 @@ consistencia = conn.execute("""
 
 # ── TABLAS ────────────────────────────────────────────────────
 ultimas = conn.execute("""
-    SELECT fecha, nombre, distancia_km, ritmo_min_km, desnivel_m, fc_media
+    SELECT id, fecha, nombre, distancia_km, ritmo_min_km, desnivel_m, fc_media
     FROM carreras ORDER BY fecha DESC LIMIT 10
 """).fetchall()
 
 top_rapidas = conn.execute("""
-    SELECT fecha, nombre, distancia_km, ritmo_min_km
+    SELECT id, fecha, nombre, distancia_km, ritmo_min_km
     FROM carreras WHERE distancia_km >= 5
     ORDER BY ritmo_min_km ASC LIMIT 5
 """).fetchall()
 
 top_largas = conn.execute("""
-    SELECT fecha, nombre, distancia_km, ritmo_min_km, desnivel_m
+    SELECT id, fecha, nombre, distancia_km, ritmo_min_km, desnivel_m
     FROM carreras ORDER BY distancia_km DESC LIMIT 5
 """).fetchall()
 
 maratones = conn.execute("""
-    SELECT fecha, nombre, distancia_km, ritmo_min_km
+    SELECT id, fecha, nombre, distancia_km, ritmo_min_km
     FROM carreras WHERE distancia_km >= 40
     ORDER BY ritmo_min_km ASC
 """).fetchall()
 
 medias = conn.execute("""
-    SELECT fecha, nombre, distancia_km, ritmo_min_km
+    SELECT id, fecha, nombre, distancia_km, ritmo_min_km
     FROM carreras WHERE distancia_km >= 19 AND distancia_km < 40
     ORDER BY ritmo_min_km ASC LIMIT 20
 """).fetchall()
@@ -224,6 +240,14 @@ for label, cond in [("< 5 km","distancia_km < 5"),("5–8 km","distancia_km>=5 A
                     ("17–22 km","distancia_km>=17 AND distancia_km<22"),("> 22 km","distancia_km>=22")]:
     n = conn.execute(f"SELECT COUNT(*) as n FROM carreras WHERE {cond}").fetchone()["n"]
     franjas_data.append({"label": label, "n": n})
+
+# ── TODAS LAS CARRERAS (para filtros dinámicos y detalle en JS) ──
+all_runs_raw = conn.execute("""
+    SELECT id, fecha, nombre, distancia_km, tiempo_min, ritmo_min_km, velocidad_kmh,
+           COALESCE(desnivel_m,0) as desnivel_m, fc_media, fc_max, calorias,
+           COALESCE(ciudad,'') as ciudad, COALESCE(polyline,'') as polyline
+    FROM carreras ORDER BY fecha ASC
+""").fetchall()
 
 conn.close()
 
@@ -276,22 +300,42 @@ cons_km    = [r["km"]                       for r in consistencia]
 fl         = [f["label"]                    for f in franjas_data]
 fc_counts  = [f["n"]                        for f in franjas_data]
 
-ultimas_r  = [{"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
+ultimas_r  = [{"id":r["id"],"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
                "ritmo":fmt_pace(r["ritmo_min_km"]),"desnivel":int(r["desnivel_m"] or 0),
                "fc": int(r["fc_media"]) if r["fc_media"] else "—"} for r in ultimas]
-rapidas_r  = [{"pos":i+1,"fecha":r["fecha"],"nombre":r["nombre"],
+rapidas_r  = [{"id":r["id"],"pos":i+1,"fecha":r["fecha"],"nombre":r["nombre"],
                "dist":round(r["distancia_km"],2),"ritmo":fmt_pace(r["ritmo_min_km"])} for i,r in enumerate(top_rapidas)]
-largas_r   = [{"pos":i+1,"fecha":r["fecha"],"nombre":r["nombre"],
+largas_r   = [{"id":r["id"],"pos":i+1,"fecha":r["fecha"],"nombre":r["nombre"],
                "dist":round(r["distancia_km"],2),"ritmo":fmt_pace(r["ritmo_min_km"]),
                "desnivel":int(r["desnivel_m"] or 0)} for i,r in enumerate(top_largas)]
-maratones_r = [{"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
+maratones_r = [{"id":r["id"],"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
                 "ritmo":fmt_pace(r["ritmo_min_km"]),"tiempo":fmt_time(r["distancia_km"],r["ritmo_min_km"])} for r in maratones]
-medias_r    = [{"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
+medias_r    = [{"id":r["id"],"fecha":r["fecha"],"nombre":r["nombre"],"dist":round(r["distancia_km"],2),
                 "ritmo":fmt_pace(r["ritmo_min_km"]),"tiempo":fmt_time(r["distancia_km"],r["ritmo_min_km"])} for r in medias]
 paises_json = json.dumps(sorted(paises_con_carreras))
 
 tiene_fc   = len(fc_anual) > 0
 tiene_ef   = len(eficiencia) > 0
+
+años_disponibles = [r["año"] for r in por_año]
+
+all_runs_json = json.dumps([{
+    "id":           r["id"],
+    "fecha":        r["fecha"],
+    "nombre":       (r["nombre"] or "")[:60],
+    "distancia_km": round(r["distancia_km"], 4),
+    "tiempo_min":   round(r["tiempo_min"], 2) if r["tiempo_min"] else None,
+    "ritmo_min_km": round(r["ritmo_min_km"], 4) if r["ritmo_min_km"] else None,
+    "velocidad_kmh":round(r["velocidad_kmh"], 2) if r["velocidad_kmh"] else None,
+    "desnivel_m":   r["desnivel_m"] or 0,
+    "fc_media":     r["fc_media"],
+    "fc_max":       r["fc_max"],
+    "calorias":     r["calorias"],
+    "ciudad":       r["ciudad"] or "",
+    "polyline":     r["polyline"] or "",
+    "start_lat":    decode_polyline_first(r["polyline"])[0],
+    "start_lng":    decode_polyline_first(r["polyline"])[1],
+} for r in all_runs_raw])
 
 # ── HTML ──────────────────────────────────────────────────────
 html = f"""<!DOCTYPE html>
@@ -304,6 +348,8 @@ html = f"""<!DOCTYPE html>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/css/jsvectormap.min.css">
 <script src="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/js/jsvectormap.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/maps/world.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root {{
   --bg:#0f1117; --surface:#1a1d27; --surface2:#22263a;
@@ -379,6 +425,141 @@ tbody td{{padding:9px 12px}}
 
 @media(max-width:1000px){{.grid-2,.grid-3,.forma-grid,.pr-grid{{grid-template-columns:1fr 1fr}}}}
 @media(max-width:600px){{.grid-2,.grid-3,.forma-grid,.pr-grid{{grid-template-columns:1fr}}}}
+
+/* ── Filtros ── */
+.filter-bar{{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 20px;
+  margin-bottom:24px;position:sticky;top:8px;z-index:200;
+  box-shadow:0 4px 20px #0007;
+}}
+.filter-group{{display:flex;align-items:center;gap:8px}}
+.filter-group label{{font-size:.75rem;color:var(--muted);font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}}
+.filter-group select{{
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--text);border-radius:8px;padding:6px 32px 6px 12px;
+  font-size:.88rem;cursor:pointer;outline:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center;
+  transition:border-color .15s;
+}}
+.filter-group select:hover,.filter-group select:focus{{border-color:var(--accent)}}
+.filter-reset{{
+  background:none;border:1px solid var(--border);color:var(--muted);
+  border-radius:8px;padding:5px 12px;font-size:.8rem;cursor:pointer;
+  transition:all .15s;
+}}
+.filter-reset:hover{{border-color:var(--accent);color:var(--accent)}}
+.filter-info{{margin-left:auto;font-size:.82rem;color:var(--muted);white-space:nowrap}}
+#filterCount{{color:var(--accent);font-weight:700;font-size:1rem}}
+.dynamic-label{{color:var(--accent2);font-size:.72rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;margin-left:4px;opacity:.8}}
+tr.clickable{{cursor:pointer;transition:background .12s}}
+tr.clickable:hover{{background:var(--surface2)!important;outline:1px solid var(--accent);outline-offset:-1px}}
+
+/* ── Modal mapa de país ── */
+.country-modal-overlay{{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);
+  z-index:400;align-items:center;justify-content:center;padding:16px;
+  backdrop-filter:blur(4px);
+}}
+.country-modal-overlay.open{{display:flex}}
+.country-modal-card{{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;width:100%;max-width:1040px;
+  height:82vh;display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 24px 60px #000c;animation:modalIn .2s ease;
+}}
+.country-modal-header{{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;
+  background:var(--surface2);
+}}
+.country-modal-title{{font-size:1.05rem;font-weight:700}}
+#countryMap{{flex:1;width:100%}}
+/* tooltip Leaflet oscuro */
+.leaflet-tooltip{{
+  background:var(--surface2)!important;border:1px solid var(--border)!important;
+  color:var(--text)!important;border-radius:8px!important;
+  font-family:'Segoe UI',system-ui,sans-serif!important;font-size:.8rem!important;
+  box-shadow:0 4px 14px #0008!important;padding:6px 10px!important;
+}}
+.leaflet-tooltip::before{{border-top-color:var(--border)!important}}
+/* cursor pointer en países con carreras */
+.jvm-region.jvm-element{{cursor:default}}
+
+/* ── Mapa de ruta ── */
+.run-map-wrap{{height:260px;border-radius:10px;overflow:hidden;margin-bottom:18px;border:1px solid var(--border);display:none}}
+.run-map-wrap.visible{{display:block}}
+#runMap{{height:100%;width:100%}}
+/* override Leaflet UI para tema oscuro */
+.leaflet-control-zoom a{{background:var(--surface2)!important;color:var(--text)!important;border-color:var(--border)!important}}
+.leaflet-control-attribution{{background:rgba(15,17,23,.7)!important;color:var(--muted)!important;font-size:.6rem!important}}
+.leaflet-control-attribution a{{color:var(--muted)!important}}
+
+/* ── Modal ── */
+.modal-overlay{{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);
+  z-index:500;align-items:center;justify-content:center;padding:20px;
+  backdrop-filter:blur(4px);
+}}
+.modal-overlay.open{{display:flex}}
+.modal-card{{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;max-width:640px;width:100%;
+  max-height:90vh;overflow-y:auto;padding:0;position:relative;
+  box-shadow:0 24px 60px #000a;animation:modalIn .2s ease;
+}}
+@keyframes modalIn{{from{{opacity:0;transform:translateY(20px)}}to{{opacity:1;transform:translateY(0)}}}}
+.modal-header{{
+  background:linear-gradient(135deg,var(--surface2),var(--surface));
+  padding:24px 28px 20px;border-bottom:1px solid var(--border);
+  border-radius:18px 18px 0 0;
+}}
+.modal-title{{font-size:1.15rem;font-weight:700;line-height:1.3;margin-bottom:4px}}
+.modal-sub{{font-size:.82rem;color:var(--muted)}}
+.modal-close{{
+  position:absolute;top:14px;right:16px;
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--muted);border-radius:50%;width:30px;height:30px;
+  font-size:.9rem;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;transition:all .15s;
+}}
+.modal-close:hover{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+.modal-body{{padding:24px 28px}}
+.modal-kpi-grid{{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;
+}}
+.modal-kpi{{
+  background:var(--bg);border:1px solid var(--border);
+  border-radius:10px;padding:14px 12px;text-align:center;
+}}
+.modal-kpi .mk-label{{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}}
+.modal-kpi .mk-val{{font-size:1.2rem;font-weight:700;line-height:1}}
+.modal-kpi .mk-unit{{font-size:.68rem;color:var(--muted);margin-top:3px}}
+.modal-row{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}}
+.modal-stat{{
+  background:var(--bg);border:1px solid var(--border);
+  border-radius:10px;padding:12px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+}}
+.modal-stat .ms-key{{font-size:.78rem;color:var(--muted)}}
+.modal-stat .ms-val{{font-size:.92rem;font-weight:700}}
+.perf-bar-wrap{{margin-top:16px}}
+.perf-bar-label{{font-size:.75rem;color:var(--muted);margin-bottom:6px}}
+.perf-bar-track{{background:var(--surface2);border-radius:99px;height:8px;overflow:hidden;position:relative}}
+.perf-bar-fill{{height:100%;border-radius:99px;transition:width .4s ease}}
+.perf-bar-ticks{{display:flex;justify-content:space-between;margin-top:3px;font-size:.65rem;color:var(--muted)}}
+.modal-link{{
+  display:inline-flex;align-items:center;gap:6px;
+  margin-top:16px;font-size:.8rem;color:var(--accent2);
+  text-decoration:none;border:1px solid var(--border);
+  border-radius:8px;padding:6px 14px;transition:all .15s;
+}}
+.modal-link:hover{{border-color:var(--accent2);background:var(--accent2)11}}
+@media(max-width:600px){{.modal-kpi-grid{{grid-template-columns:repeat(2,1fr)}}.modal-row{{grid-template-columns:1fr}}}}
 </style>
 </head>
 <body>
@@ -388,6 +569,40 @@ tbody td{{padding:9px 12px}}
   <div>
     <h1>Dashboard Carreras · Emi</h1>
     <div class="sub">Datos desde 2016 · {stats['total_carreras']} actividades · Actualizado {date.today().strftime('%d/%m/%Y')}</div>
+  </div>
+</div>
+
+<!-- ═══ FILTROS ═══ -->
+<div class="filter-bar">
+  <div class="filter-group">
+    <label>📅 Año</label>
+    <select id="filterYear" onchange="onFilterChange()">
+      <option value="all">Todos los años</option>
+      {"".join(f'<option value="{y}">{y}</option>' for y in años_disponibles)}
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>🗓 Mes</label>
+    <select id="filterMonth" onchange="onFilterChange()">
+      <option value="all">Todos los meses</option>
+      <option value="01">Enero</option>
+      <option value="02">Febrero</option>
+      <option value="03">Marzo</option>
+      <option value="04">Abril</option>
+      <option value="05">Mayo</option>
+      <option value="06">Junio</option>
+      <option value="07">Julio</option>
+      <option value="08">Agosto</option>
+      <option value="09">Septiembre</option>
+      <option value="10">Octubre</option>
+      <option value="11">Noviembre</option>
+      <option value="12">Diciembre</option>
+    </select>
+  </div>
+  <button class="filter-reset" onclick="resetFilters()">✕ Reset</button>
+  <div class="filter-info">
+    Mostrando <span id="filterCount">{stats['total_carreras']}</span> carreras
+    <span id="filterDesc"></span>
   </div>
 </div>
 
@@ -487,14 +702,14 @@ tbody td{{padding:9px 12px}}
 </div>
 
 <!-- ═══ CARGA DE ENTRENAMIENTO ═══ -->
-<div class="section-title">Carga de entrenamiento — últimas 12 semanas</div>
+<div class="section-title" id="titleCarga">Carga de entrenamiento — últimas 12 semanas</div>
 <div class="grid-2">
   <div class="card">
-    <h2>Km por semana</h2>
+    <h2>Km por semana <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartSemKm"></canvas></div>
   </div>
   <div class="card">
-    <h2>Carreras por semana</h2>
+    <h2>Carreras por semana <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartSemCarr"></canvas></div>
   </div>
 </div>
@@ -517,33 +732,33 @@ tbody td{{padding:9px 12px}}
     <div class="chart-wrap"><canvas id="chartCarrAnual"></canvas></div>
   </div>
   <div class="card">
-    <h2>Distribución por distancia</h2>
+    <h2>Distribución por distancia <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartFranjas"></canvas></div>
   </div>
 </div>
 
 <!-- ═══ EVOLUCION MENSUAL ═══ -->
-<div class="section-title">Evolución mensual — últimos 24 meses</div>
+<div class="section-title" id="titleMensual">Evolución mensual — últimos 24 meses</div>
 <div class="grid-2">
   <div class="card">
-    <h2>Km mensuales</h2>
+    <h2>Km mensuales <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartKmMes"></canvas></div>
   </div>
   <div class="card">
-    <h2>Ritmo mensual</h2>
+    <h2>Ritmo mensual <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartRitmoMes"></canvas></div>
   </div>
 </div>
 
 <!-- ═══ CONSISTENCIA ═══ -->
-<div class="section-title">Consistencia — últimos 13 meses</div>
+<div class="section-title" id="titleConsistencia">Consistencia — últimos 13 meses</div>
 <div class="grid-2">
   <div class="card">
-    <h2>Semanas activas por mes</h2>
+    <h2>Semanas activas por mes <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartConsistencia"></canvas></div>
   </div>
   <div class="card">
-    <h2>Km por mes</h2>
+    <h2>Km por mes <span class="dynamic-label">⟳ dinámico</span></h2>
     <div class="chart-wrap"><canvas id="chartConKm"></canvas></div>
   </div>
 </div>
@@ -578,7 +793,7 @@ tbody td{{padding:9px 12px}}
     <table>
       <thead><tr><th>#</th><th>Fecha</th><th>Dist</th><th>Ritmo</th><th>Nombre</th></tr></thead>
       <tbody>
-        {"".join(f'<tr><td class="pos">{r["pos"]}</td><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in rapidas_r)}
+        {"".join(f'<tr class="clickable" data-run-id="{r["id"]}" onclick="openRunModal({r["id"]})"><td class="pos">{r["pos"]}</td><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in rapidas_r)}
       </tbody>
     </table>
   </div>
@@ -587,7 +802,7 @@ tbody td{{padding:9px 12px}}
     <table>
       <thead><tr><th>#</th><th>Fecha</th><th>Dist</th><th>Ritmo</th><th>D+</th></tr></thead>
       <tbody>
-        {"".join(f'<tr><td class="pos">{r["pos"]}</td><td>{r["fecha"]}</td><td><strong>{r["dist"]} km</strong></td><td class="pace">{r["ritmo"]}</td><td style="color:var(--accent3)">{r["desnivel"]}m</td></tr>' for r in largas_r)}
+        {"".join(f'<tr class="clickable" data-run-id="{r["id"]}" onclick="openRunModal({r["id"]})"><td class="pos">{r["pos"]}</td><td>{r["fecha"]}</td><td><strong>{r["dist"]} km</strong></td><td class="pace">{r["ritmo"]}</td><td style="color:var(--accent3)">{r["desnivel"]}m</td></tr>' for r in largas_r)}
       </tbody>
     </table>
   </div>
@@ -599,7 +814,7 @@ tbody td{{padding:9px 12px}}
     <table>
       <thead><tr><th>Fecha</th><th>Dist</th><th>Ritmo</th><th>Tiempo</th><th>Nombre</th></tr></thead>
       <tbody>
-        {"".join(f'<tr><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td><span class="badge badge-orange">{r["tiempo"]}</span></td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in maratones_r)}
+        {"".join(f'<tr class="clickable" data-run-id="{r["id"]}" onclick="openRunModal({r["id"]})"><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td><span class="badge badge-orange">{r["tiempo"]}</span></td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in maratones_r)}
       </tbody>
     </table>
   </div>
@@ -608,20 +823,49 @@ tbody td{{padding:9px 12px}}
     <table>
       <thead><tr><th>Fecha</th><th>Dist</th><th>Ritmo</th><th>Tiempo</th><th>Nombre</th></tr></thead>
       <tbody>
-        {"".join(f'<tr><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td><span class="badge badge-blue">{r["tiempo"]}</span></td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in medias_r)}
+        {"".join(f'<tr class="clickable" data-run-id="{r["id"]}" onclick="openRunModal({r["id"]})"><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td><span class="badge badge-blue">{r["tiempo"]}</span></td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:35]}</td></tr>' for r in medias_r)}
       </tbody>
     </table>
   </div>
 </div>
 
 <div class="card">
-  <h2>Últimas 10 carreras</h2>
+  <h2>Últimas 10 carreras <span class="dynamic-label">⟳ dinámico</span></h2>
   <table>
     <thead><tr><th>Fecha</th><th>Dist</th><th>Ritmo</th><th>D+</th><th>FC</th><th>Nombre</th></tr></thead>
-    <tbody>
-      {"".join(f'<tr><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td style="color:var(--accent3)">{r["desnivel"]}m</td><td style="color:var(--accent2)">{r["fc"]}</td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:45]}</td></tr>' for r in ultimas_r)}
+    <tbody id="ultimasBody">
+      {"".join(f'<tr class="clickable" data-run-id="{r["id"]}" onclick="openRunModal({r["id"]})"><td>{r["fecha"]}</td><td>{r["dist"]} km</td><td class="pace">{r["ritmo"]}</td><td style="color:var(--accent3)">{r["desnivel"]}m</td><td style="color:var(--accent2)">{r["fc"]}</td><td style="color:var(--muted);font-size:.8rem">{r["nombre"][:45]}</td></tr>' for r in ultimas_r)}
     </tbody>
   </table>
+</div>
+
+<!-- ═══ MODAL MAPA DE PAÍS ═══ -->
+<div id="countryModalOverlay" class="country-modal-overlay" onclick="if(event.target===this)closeCountryModal()">
+  <div class="country-modal-card">
+    <div class="country-modal-header">
+      <div class="country-modal-title" id="countryModalTitle">—</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span id="countryRunInfo" style="font-size:.8rem;color:var(--muted)"></span>
+        <button class="modal-close" style="position:static" onclick="closeCountryModal()">✕</button>
+      </div>
+    </div>
+    <div id="countryMap"></div>
+  </div>
+</div>
+
+<!-- ═══ MODAL DETALLE CARRERA ═══ -->
+<div id="modalOverlay" class="modal-overlay" onclick="if(event.target===this)closeRunModal()">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeRunModal()">✕</button>
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">—</div>
+      <div class="modal-sub" id="modalSub">—</div>
+    </div>
+    <div class="run-map-wrap" id="runMapWrap">
+      <div id="runMap"></div>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
 </div>
 
 <script>
@@ -654,6 +898,9 @@ const FC_CNT=  {json.dumps(fc_counts)};
 
 const TIENE_FC = {'true' if tiene_fc else 'false'};
 
+// Todas las carreras para filtros dinámicos
+const ALL_RUNS = {all_runs_json};
+
 const O='#f97316', B='#3b82f6', G='#22c55e', P='#a855f7', T='#14b8a6', R='#ec4899';
 const BORDER='#2e3347', MUTED='#94a3b8';
 const g = {{color:BORDER, drawBorder:false}};
@@ -671,7 +918,7 @@ const paceTip = labels => ({{
 }});
 
 // Km semanales
-new Chart('chartSemKm', {{type:'bar', data:{{labels:SEM_L, datasets:[{{
+let chartSemKm = new Chart('chartSemKm', {{type:'bar', data:{{labels:SEM_L, datasets:[{{
   label:'Km', data:SEM_KM, backgroundColor:O+'99', borderColor:O, borderWidth:2, borderRadius:5
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
   plugins:{{legend:{{display:false}}}},
@@ -679,14 +926,14 @@ new Chart('chartSemKm', {{type:'bar', data:{{labels:SEM_L, datasets:[{{
 }}}});
 
 // Carreras semanales
-new Chart('chartSemCarr', {{type:'bar', data:{{labels:SEM_L, datasets:[{{
+let chartSemCarr = new Chart('chartSemCarr', {{type:'bar', data:{{labels:SEM_L, datasets:[{{
   label:'Carreras', data:SEM_CARR, backgroundColor:T+'99', borderColor:T, borderWidth:2, borderRadius:5
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
   plugins:{{legend:{{display:false}}}},
   scales:{{x:{{grid:g, ticks:{{maxRotation:45,font:{{size:10}}}}}}, y:{{grid:g, ticks:{{stepSize:1}}}}}}
 }}}});
 
-// Km anual
+// Km anual (estático)
 new Chart('chartKmAnual', {{type:'bar', data:{{labels:AÑOS, datasets:[{{
   label:'Km', data:KM_AÑO, backgroundColor:O+'99', borderColor:O, borderWidth:2, borderRadius:6
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
@@ -694,7 +941,7 @@ new Chart('chartKmAnual', {{type:'bar', data:{{labels:AÑOS, datasets:[{{
   scales:{{x:{{grid:g}}, y:{{grid:g, ticks:{{callback:v=>v+' km'}}}}}}
 }}}});
 
-// Ritmo anual
+// Ritmo anual (estático)
 new Chart('chartRitmoAnual', {{type:'line', data:{{labels:AÑOS, datasets:[{{
   label:'Ritmo', data:RT_AÑO, borderColor:B, backgroundColor:B+'22',
   fill:true, tension:0.4, pointBackgroundColor:B, pointRadius:5
@@ -703,7 +950,7 @@ new Chart('chartRitmoAnual', {{type:'line', data:{{labels:AÑOS, datasets:[{{
   scales:{{x:{{grid:g}}, y:paceAxis}}
 }}}});
 
-// Carreras anual
+// Carreras anual (estático)
 new Chart('chartCarrAnual', {{type:'bar', data:{{labels:AÑOS, datasets:[{{
   label:'Carreras', data:CARR_AÑO, backgroundColor:P+'88', borderColor:P, borderWidth:2, borderRadius:6
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
@@ -712,7 +959,7 @@ new Chart('chartCarrAnual', {{type:'bar', data:{{labels:AÑOS, datasets:[{{
 }}}});
 
 // Donut franjas
-new Chart('chartFranjas', {{type:'doughnut', data:{{labels:FL, datasets:[{{
+let chartFranjas = new Chart('chartFranjas', {{type:'doughnut', data:{{labels:FL, datasets:[{{
   data:FC_CNT,
   backgroundColor:[O+'99',B+'99',G+'99',P+'99',R+'99',T+'99'],
   borderColor:[O,B,G,P,R,T], borderWidth:2
@@ -723,7 +970,7 @@ new Chart('chartFranjas', {{type:'doughnut', data:{{labels:FL, datasets:[{{
 }}}});
 
 // Km mensual
-new Chart('chartKmMes', {{type:'bar', data:{{labels:MES_L, datasets:[{{
+let chartKmMes = new Chart('chartKmMes', {{type:'bar', data:{{labels:MES_L, datasets:[{{
   label:'Km', data:MES_KM, backgroundColor:G+'88', borderColor:G, borderWidth:1, borderRadius:4
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
   plugins:{{legend:{{display:false}}}},
@@ -731,7 +978,7 @@ new Chart('chartKmMes', {{type:'bar', data:{{labels:MES_L, datasets:[{{
 }}}});
 
 // Ritmo mensual
-new Chart('chartRitmoMes', {{type:'line', data:{{labels:MES_L, datasets:[{{
+let chartRitmoMes = new Chart('chartRitmoMes', {{type:'line', data:{{labels:MES_L, datasets:[{{
   label:'Ritmo', data:MES_RT, borderColor:P, backgroundColor:P+'22',
   fill:true, tension:0.4, pointRadius:3, pointBackgroundColor:P
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
@@ -740,7 +987,7 @@ new Chart('chartRitmoMes', {{type:'line', data:{{labels:MES_L, datasets:[{{
 }}}});
 
 // Consistencia - semanas activas
-new Chart('chartConsistencia', {{type:'bar', data:{{labels:CONS_L, datasets:[{{
+let chartConsistencia = new Chart('chartConsistencia', {{type:'bar', data:{{labels:CONS_L, datasets:[{{
   label:'Semanas activas', data:CONS_SEM, backgroundColor:T+'88', borderColor:T, borderWidth:1, borderRadius:4
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
   plugins:{{legend:{{display:false}}}},
@@ -748,7 +995,7 @@ new Chart('chartConsistencia', {{type:'bar', data:{{labels:CONS_L, datasets:[{{
 }}}});
 
 // Consistencia - km por mes
-new Chart('chartConKm', {{type:'bar', data:{{labels:CONS_L, datasets:[{{
+let chartConKm = new Chart('chartConKm', {{type:'bar', data:{{labels:CONS_L, datasets:[{{
   label:'Km', data:CONS_KM, backgroundColor:R+'88', borderColor:R, borderWidth:1, borderRadius:4
 }}]}}, options:{{responsive:true, maintainAspectRatio:false,
   plugins:{{legend:{{display:false}}}},
@@ -771,12 +1018,135 @@ try {{
     }},
     selectedRegions: PAISES,
     onRegionTooltipShow(e, tooltip, code) {{
-      if (PAISES.includes(code)) tooltip.text(tooltip.text() + ' ✅');
+      if (PAISES.includes(code)) tooltip.text(tooltip.text() + ' ✅ — clic para ver carreras');
+    }},
+    onRegionClick(event, code) {{
+      if (PAISES.includes(code)) openCountryMap(code);
     }},
   }});
 }} catch(e) {{ console.warn('Mapa no disponible:', e); }}
 
-// FC y Eficiencia (solo si hay datos)
+// ══════════════════════════════════════════════════════════════
+// MAPA DE PAÍS — dots por carrera
+// ══════════════════════════════════════════════════════════════
+const COUNTRY_NAMES = {{
+  ES:'España', AU:'Australia', GB:'Reino Unido', PT:'Portugal',
+  DE:'Alemania', FR:'Francia', IT:'Italia', US:'EE.UU.', JP:'Japón', CH:'Suiza'
+}};
+
+// Bounding boxes [SW, NE]
+const COUNTRY_BOUNDS = {{
+  ES:[[ 35.9, -9.3 ],[43.8, 4.3 ]],
+  AU:[[-43.7,113.3 ],[-10.7,153.6]],
+  GB:[[ 49.9, -8.2 ],[60.9, 1.8 ]],
+  PT:[[ 36.9, -9.5 ],[42.2,-6.2 ]],
+  DE:[[ 47.3,  5.9 ],[55.1,15.0 ]],
+  FR:[[ 41.3, -5.1 ],[51.1, 9.6 ]],
+  IT:[[ 36.6,  6.6 ],[47.1,18.5 ]],
+  US:[[ 24.5,-125.0],[49.4,-66.9]],
+  JP:[[ 24.2, 122.9],[45.5,145.8]],
+  CH:[[ 45.8,  5.9 ],[47.8,10.5 ]],
+}};
+
+function getRunsInCountry(iso) {{
+  const b = COUNTRY_BOUNDS[iso];
+  if (!b) return [];
+  return ALL_RUNS.filter(r => {{
+    if (r.start_lat == null) return false;
+    return r.start_lat >= b[0][0] && r.start_lat <= b[1][0]
+        && r.start_lng >= b[0][1] && r.start_lng <= b[1][1];
+  }});
+}}
+
+// Función de color por ritmo relativo a la media del grupo
+function paceColor(ritmo, avg) {{
+  if (!ritmo || !avg) return '#f97316';
+  const diff = ritmo - avg;           // positivo = más lento
+  if (diff < -0.3) return '#22c55e';  // verde: rápido
+  if (diff >  0.3) return '#ef4444';  // rojo: lento
+  return '#f97316';                    // naranja: normal
+}}
+
+let _countryMap = null;
+
+function openCountryMap(iso) {{
+  const name  = COUNTRY_NAMES[iso] || iso;
+  const runs  = getRunsInCountry(iso);
+  const total = runs.length;
+
+  // Calcular km totales y ritmo medio para el header
+  const kmTot = runs.reduce((s,r) => s + (r.distancia_km||0), 0);
+  const ritmos = runs.filter(r => r.ritmo_min_km).map(r => r.ritmo_min_km);
+  const avgRt  = ritmos.length ? ritmos.reduce((a,b)=>a+b,0)/ritmos.length : null;
+
+  document.getElementById('countryModalTitle').innerHTML =
+    `🗺️ ${{name}}`;
+  document.getElementById('countryRunInfo').textContent =
+    `${{total}} carrera${{total!==1?'s':''}}  ·  ${{kmTot.toFixed(0)}} km` +
+    (avgRt ? `  ·  ritmo medio ${{fmtPaceJS(avgRt)}}` : '');
+
+  document.getElementById('countryModalOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  if (_countryMap) {{ _countryMap.remove(); _countryMap = null; }}
+
+  setTimeout(() => {{
+    _countryMap = L.map('countryMap', {{ zoomControl:true, attributionControl:true }});
+
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+      attribution:'© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+      subdomains:'abcd', maxZoom:19
+    }}).addTo(_countryMap);
+
+    // Ajustar vista al país
+    const bb = COUNTRY_BOUNDS[iso];
+    if (bb) _countryMap.fitBounds([bb[0], bb[1]], {{padding:[20,20]}});
+
+    // Añadir una bolita por carrera
+    runs.forEach(r => {{
+      const color = paceColor(r.ritmo_min_km, avgRt);
+      const marker = L.circleMarker([r.start_lat, r.start_lng], {{
+        radius: 6, color: '#fff', weight: 1.2,
+        fillColor: color, fillOpacity: 0.85,
+      }}).addTo(_countryMap);
+
+      const tip = `<strong>${{r.nombre}}</strong><br>
+        📅 ${{r.fecha}}&nbsp;&nbsp;
+        📏 ${{r.distancia_km.toFixed(1)}} km&nbsp;&nbsp;
+        ⏱ ${{fmtPaceJS(r.ritmo_min_km)}} min/km` +
+        (r.fc_media ? `<br>❤️ ${{Math.round(r.fc_media)}} ppm` : '');
+
+      marker.bindTooltip(tip, {{direction:'top', offset:[0,-4]}});
+      marker.on('click', () => openRunModal(r.id));
+      // Cursor pointer
+      marker.getElement && marker.on('add', () => {{
+        if (marker.getElement()) marker.getElement().style.cursor = 'pointer';
+      }});
+    }});
+
+    // Leyenda de colores
+    const legend = L.control({{position:'bottomright'}});
+    legend.onAdd = () => {{
+      const d = L.DomUtil.create('div');
+      d.style.cssText = 'background:rgba(26,29,39,.9);border:1px solid #2e3347;border-radius:8px;padding:8px 12px;font-size:.75rem;color:#e2e8f0;line-height:1.8';
+      d.innerHTML = '<div style="font-weight:700;margin-bottom:4px">Ritmo vs media</div>'
+        + '<span style="color:#22c55e">●</span> Rápido&nbsp;&nbsp;'
+        + '<span style="color:#f97316">●</span> Normal&nbsp;&nbsp;'
+        + '<span style="color:#ef4444">●</span> Lento';
+      return d;
+    }};
+    legend.addTo(_countryMap);
+
+  }}, 80);
+}}
+
+function closeCountryModal() {{
+  document.getElementById('countryModalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  if (_countryMap) {{ _countryMap.remove(); _countryMap = null; }}
+}}
+
+// FC y Eficiencia (solo si hay datos, estáticos)
 if(TIENE_FC && document.getElementById('chartFC')){{
   new Chart('chartFC', {{type:'line', data:{{labels:FC_L, datasets:[{{
     label:'FC media', data:FC_V, borderColor:R, backgroundColor:R+'22',
@@ -793,11 +1163,398 @@ if(TIENE_FC && document.getElementById('chartFC')){{
     scales:{{x:{{grid:g, ticks:{{maxRotation:45,font:{{size:10}}}}}}, y:{{grid:g}}}}
   }}}});
 }}
+
+// ══════════════════════════════════════════════════════════════
+// FILTROS DINÁMICOS
+// ══════════════════════════════════════════════════════════════
+const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+                     'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function fmtPaceJS(p) {{
+  if (!p) return '--:--';
+  const m = Math.floor(p), s = Math.round((p - m) * 60);
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}}
+
+function getISOWeekStr(date) {{
+  const d = new Date(date);
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() + 4 - day);
+  const y = d.getFullYear();
+  const start = new Date(y, 0, 1);
+  const w = Math.ceil((((d - start) / 86400000) + 1) / 7);
+  return y + '-' + String(w).padStart(2, '0');
+}}
+
+function avg(arr) {{
+  const a = arr.filter(v => v != null);
+  return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+}}
+
+function updateDynamicCharts() {{
+  const yr = document.getElementById('filterYear').value;
+  const mo = document.getElementById('filterMonth').value;
+  const isFiltered = yr !== 'all' || mo !== 'all';
+
+  // ── Filtrar carreras ──────────────────────────────────────
+  let runs = ALL_RUNS;
+  if (yr !== 'all') runs = runs.filter(r => r.fecha.startsWith(yr));
+  if (mo !== 'all') runs = runs.filter(r => r.fecha.substring(5, 7) === mo);
+
+  // ── Contador ─────────────────────────────────────────────
+  document.getElementById('filterCount').textContent = runs.length;
+  const descEl = document.getElementById('filterDesc');
+  if (!isFiltered) {{
+    descEl.textContent = '';
+  }} else {{
+    const parts = [];
+    if (yr !== 'all') parts.push(yr);
+    if (mo !== 'all') parts.push(MONTH_NAMES[parseInt(mo) - 1]);
+    descEl.textContent = ' · ' + parts.join(' ');
+  }}
+
+  // ── Agrupar por mes ────────────────────────────────────────
+  const byMonth = {{}};
+  runs.forEach(r => {{
+    const mk = r.fecha.substring(0, 7);
+    if (!byMonth[mk]) byMonth[mk] = {{ km: 0, ritmos: [], n: 0 }};
+    byMonth[mk].km     += r.distancia_km;
+    byMonth[mk].n      += 1;
+    if (r.ritmo_min_km) byMonth[mk].ritmos.push(r.ritmo_min_km);
+  }});
+  const mesKeys = Object.keys(byMonth).sort();
+  const newMesKm  = mesKeys.map(k => Math.round(byMonth[k].km * 10) / 10);
+  const newMesRt  = mesKeys.map(k => {{
+    const a = avg(byMonth[k].ritmos);
+    return a ? Math.round(a * 10000) / 10000 : null;
+  }});
+  const newMesRl  = newMesRt.map(fmtPaceJS);
+
+  chartKmMes.data.labels = mesKeys;
+  chartKmMes.data.datasets[0].data = newMesKm;
+  chartKmMes.update('none');
+
+  chartRitmoMes.data.labels = mesKeys;
+  chartRitmoMes.data.datasets[0].data = newMesRt;
+  chartRitmoMes.options.plugins.tooltip = {{ callbacks: {{ label: ctx => ' ' + newMesRl[ctx.dataIndex] + ' min/km' }} }};
+  chartRitmoMes.update('none');
+
+  // ── Actualizar títulos de sección ─────────────────────────
+  const sfx = isFiltered ? ' — ' + (yr !== 'all' ? yr : '') + (mo !== 'all' ? (yr !== 'all' ? ' · ' : '') + MONTH_NAMES[parseInt(mo)-1] : '') : '';
+  document.getElementById('titleMensual').textContent       = 'Evolución mensual' + (isFiltered ? sfx : ' — últimos 24 meses');
+  document.getElementById('titleConsistencia').textContent  = 'Consistencia'      + (isFiltered ? sfx : ' — últimos 13 meses');
+  document.getElementById('titleCarga').textContent         = 'Carga de entrenamiento' + (isFiltered ? sfx : ' — últimas 12 semanas');
+
+  // ── Agrupar por semana ────────────────────────────────────
+  const byWeek = {{}};
+  runs.forEach(r => {{
+    const wk = getISOWeekStr(r.fecha);
+    if (!byWeek[wk]) byWeek[wk] = {{ km: 0, n: 0 }};
+    byWeek[wk].km += r.distancia_km;
+    byWeek[wk].n  += 1;
+  }});
+  let wkKeys = Object.keys(byWeek).sort();
+  if (!isFiltered) wkKeys = wkKeys.slice(-12);  // defecto: últimas 12
+
+  chartSemKm.data.labels = wkKeys;
+  chartSemKm.data.datasets[0].data = wkKeys.map(k => Math.round(byWeek[k].km * 10) / 10);
+  chartSemKm.update('none');
+
+  chartSemCarr.data.labels = wkKeys;
+  chartSemCarr.data.datasets[0].data = wkKeys.map(k => byWeek[k].n);
+  chartSemCarr.update('none');
+
+  // ── Consistencia (semanas activas por mes) ────────────────
+  const byCons = {{}};
+  runs.forEach(r => {{
+    const mk = r.fecha.substring(0, 7);
+    if (!byCons[mk]) byCons[mk] = {{ semanas: new Set(), km: 0 }};
+    byCons[mk].semanas.add(getISOWeekStr(r.fecha));
+    byCons[mk].km += r.distancia_km;
+  }});
+  let consKeys = Object.keys(byCons).sort();
+  if (!isFiltered) consKeys = consKeys.slice(-13);  // defecto: últimos 13
+
+  chartConsistencia.data.labels = consKeys;
+  chartConsistencia.data.datasets[0].data = consKeys.map(k => byCons[k] ? byCons[k].semanas.size : 0);
+  chartConsistencia.options.scales.y.max = isFiltered ? undefined : 5;
+  chartConsistencia.update('none');
+
+  chartConKm.data.labels = consKeys;
+  chartConKm.data.datasets[0].data = consKeys.map(k => byCons[k] ? Math.round(byCons[k].km * 10) / 10 : 0);
+  chartConKm.update('none');
+
+  // ── Franjas de distancia ──────────────────────────────────
+  const franjaFns = [
+    d => d < 5,
+    d => d >= 5  && d < 8,
+    d => d >= 8  && d < 12,
+    d => d >= 12 && d < 17,
+    d => d >= 17 && d < 22,
+    d => d >= 22,
+  ];
+  chartFranjas.data.datasets[0].data = franjaFns.map(fn => runs.filter(r => fn(r.distancia_km)).length);
+  chartFranjas.update('none');
+
+  // ── Tabla últimas 10 carreras ─────────────────────────────
+  const last10 = runs.slice().reverse().slice(0, 10);
+  document.getElementById('ultimasBody').innerHTML = last10.map(r => `
+    <tr class="clickable" data-run-id="${{r.id}}" onclick="openRunModal(${{r.id}})">
+      <td>${{r.fecha}}</td>
+      <td>${{r.distancia_km.toFixed(2)}} km</td>
+      <td class="pace">${{fmtPaceJS(r.ritmo_min_km)}}</td>
+      <td style="color:var(--accent3)">${{Math.round(r.desnivel_m || 0)}}m</td>
+      <td style="color:var(--accent2)">${{r.fc_media ? Math.round(r.fc_media) : '—'}}</td>
+      <td style="color:var(--muted);font-size:.8rem">${{r.nombre.substring(0, 45)}}</td>
+    </tr>`).join('');
+}}
+
+function onFilterChange() {{
+  const yr = document.getElementById('filterYear').value;
+  const mo = document.getElementById('filterMonth').value;
+  // Si seleccionan mes sin año, habilitar mes es OK (filtra por ese mes de todos los años)
+  updateDynamicCharts();
+}}
+
+function resetFilters() {{
+  document.getElementById('filterYear').value  = 'all';
+  document.getElementById('filterMonth').value = 'all';
+  updateDynamicCharts();
+}}
+
+// ══════════════════════════════════════════════════════════════
+// MODAL DETALLE CARRERA
+// ══════════════════════════════════════════════════════════════
+const RUN_MAP = {{}};
+ALL_RUNS.forEach(r => {{ RUN_MAP[r.id] = r; }});
+
+// ── Decodificador de Google Encoded Polyline ──────────────────
+function decodePolyline(str) {{
+  const coords = [];
+  let idx = 0, lat = 0, lng = 0;
+  while (idx < str.length) {{
+    let b, shift = 0, result = 0;
+    do {{ b = str.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; }} while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do {{ b = str.charCodeAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; }} while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    coords.push([lat / 1e5, lng / 1e5]);
+  }}
+  return coords;
+}}
+
+// ── Mapa Leaflet del recorrido ────────────────────────────────
+let _leafletMap = null;
+
+function showRunMap(polyline) {{
+  const wrap = document.getElementById('runMapWrap');
+  if (!polyline) {{ wrap.classList.remove('visible'); return; }}
+
+  const coords = decodePolyline(polyline);
+  if (coords.length < 2) {{ wrap.classList.remove('visible'); return; }}
+
+  wrap.classList.add('visible');
+
+  // Destruir instancia anterior
+  if (_leafletMap) {{ _leafletMap.remove(); _leafletMap = null; }}
+
+  // Pequeño delay para que el DOM esté visible antes de init
+  setTimeout(() => {{
+    _leafletMap = L.map('runMap', {{ zoomControl:true, attributionControl:true }});
+
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+      attribution:'© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+      subdomains:'abcd', maxZoom:19
+    }}).addTo(_leafletMap);
+
+    // Traza naranja
+    const track = L.polyline(coords, {{ color:'#f97316', weight:4, opacity:.9, lineJoin:'round' }}).addTo(_leafletMap);
+    _leafletMap.fitBounds(track.getBounds(), {{ padding:[18,18] }});
+
+    // Marcador inicio (verde) y fin (rojo)
+    const dot = (latlng, color) => L.circleMarker(latlng, {{
+      radius:7, color:'#fff', weight:2,
+      fillColor:color, fillOpacity:1
+    }}).addTo(_leafletMap);
+
+    dot(coords[0], '#22c55e').bindTooltip('Inicio');
+    dot(coords[coords.length - 1], '#ef4444').bindTooltip('Fin');
+  }}, 80);
+}}
+
+// Calcula cuantil de ritmo: qué % de carreras similares son más lentas
+function pacePercentile(run) {{
+  const d = run.distancia_km;
+  const margin = d * 0.15;
+  const similar = ALL_RUNS.filter(r => r.ritmo_min_km && Math.abs(r.distancia_km - d) <= margin);
+  if (similar.length < 3) return null;
+  const slower = similar.filter(r => r.ritmo_min_km > run.ritmo_min_km).length;
+  return Math.round(slower / similar.length * 100);
+}}
+
+function fmtTotalTime(tmin) {{
+  if (!tmin) return '--';
+  const h = Math.floor(tmin / 60);
+  const m = Math.floor(tmin % 60);
+  const s = Math.round((tmin - Math.floor(tmin)) * 60);
+  if (h > 0) return h + 'h ' + String(m).padStart(2,'0') + 'm ' + String(s).padStart(2,'0') + 's';
+  return m + 'm ' + String(s).padStart(2,'0') + 's';
+}}
+
+function openRunModal(id) {{
+  const r = RUN_MAP[id];
+  if (!r) return;
+
+  // Estadísticas de referencia (carreras de distancia similar ±15%)
+  const margin = r.distancia_km * 0.15;
+  const similar = ALL_RUNS.filter(x => x.ritmo_min_km && Math.abs(x.distancia_km - r.distancia_km) <= margin);
+  const avgRitmo = similar.length ? similar.reduce((a,x) => a + x.ritmo_min_km, 0) / similar.length : null;
+  const bestRitmo = similar.length ? Math.min(...similar.map(x => x.ritmo_min_km)) : null;
+  const worstRitmo = similar.length ? Math.max(...similar.map(x => x.ritmo_min_km)) : null;
+  const pctil = pacePercentile(r);
+
+  // Año de la carrera: ritmo medio de ese año
+  const yr = r.fecha.substring(0, 4);
+  const yrRuns = ALL_RUNS.filter(x => x.fecha.startsWith(yr) && x.ritmo_min_km);
+  const yrAvgRitmo = yrRuns.length ? yrRuns.reduce((a,x) => a + x.ritmo_min_km, 0) / yrRuns.length : null;
+
+  // Header
+  const ciudad = r.ciudad ? ' · 📍 ' + r.ciudad : '';
+  document.getElementById('modalTitle').textContent = r.nombre || 'Carrera sin nombre';
+  document.getElementById('modalSub').textContent   = '📅 ' + r.fecha + ciudad + '  ·  🆔 ' + r.id;
+
+  // KPIs principales
+  const kpis = [
+    {{ label:'Distancia', val: r.distancia_km.toFixed(2), unit:'km', color:'var(--accent)' }},
+    {{ label:'Tiempo',    val: fmtTotalTime(r.tiempo_min), unit:'total', color:'var(--accent2)' }},
+    {{ label:'Ritmo',     val: fmtPaceJS(r.ritmo_min_km), unit:'min/km', color:'var(--accent3)' }},
+    {{ label:'Velocidad', val: r.velocidad_kmh ? r.velocidad_kmh.toFixed(1) : '—', unit:'km/h', color:'var(--accent4)' }},
+  ];
+
+  const kpiHtml = kpis.map(k => `
+    <div class="modal-kpi">
+      <div class="mk-label">${{k.label}}</div>
+      <div class="mk-val" style="color:${{k.color}}">${{k.val}}</div>
+      <div class="mk-unit">${{k.unit}}</div>
+    </div>`).join('');
+
+  // Stats secundarios
+  const stats2 = [
+    {{ k:'FC media',   v: r.fc_media  ? Math.round(r.fc_media)  + ' ppm' : '—', c:'var(--accent)'  }},
+    {{ k:'FC máxima',  v: r.fc_max    ? Math.round(r.fc_max)    + ' ppm' : '—', c:'#ef4444'        }},
+    {{ k:'Calorías',   v: r.calorias  ? Math.round(r.calorias)  + ' kcal': '—', c:'var(--accent3)' }},
+    {{ k:'Desnivel',   v: r.desnivel_m ? Math.round(r.desnivel_m) + ' m D+': '0 m', c:'var(--accent2)' }},
+  ];
+  const stats2Html = stats2.map(s => `
+    <div class="modal-stat">
+      <span class="ms-key">${{s.k}}</span>
+      <span class="ms-val" style="color:${{s.c}}">${{s.v}}</span>
+    </div>`).join('');
+
+  // Barra de rendimiento (ritmo vs mejor/peor en distancias similares)
+  let perfHtml = '';
+  if (r.ritmo_min_km && bestRitmo && worstRitmo && similar.length >= 5) {{
+    const range  = worstRitmo - bestRitmo;
+    const pos    = range > 0 ? (r.ritmo_min_km - bestRitmo) / range : 0.5;
+    const fillPct = Math.round((1 - pos) * 100);  // 100% = mejor ritmo
+    const barColor = fillPct >= 70 ? 'var(--accent3)' : fillPct >= 40 ? 'var(--accent)' : '#ef4444';
+    perfHtml = `
+      <div class="perf-bar-wrap">
+        <div class="perf-bar-label">
+          Rendimiento en carreras de distancia similar (±15%)
+          ${{pctil !== null ? `— mejor que el <strong style="color:var(--accent)">${{pctil}}%</strong> de tus ${{similar.length}} carreras similares` : ''}}
+        </div>
+        <div class="perf-bar-track">
+          <div class="perf-bar-fill" style="width:${{fillPct}}%;background:${{barColor}}"></div>
+        </div>
+        <div class="perf-bar-ticks">
+          <span>🏆 Mejor: ${{fmtPaceJS(bestRitmo)}}</span>
+          ${{avgRitmo ? `<span>⌀ Media: ${{fmtPaceJS(avgRitmo)}}</span>` : ''}}
+          <span>🐢 Peor: ${{fmtPaceJS(worstRitmo)}}</span>
+        </div>
+      </div>`;
+  }}
+
+  // Comparación con media anual
+  let yrHtml = '';
+  if (r.ritmo_min_km && yrAvgRitmo) {{
+    const diff = yrAvgRitmo - r.ritmo_min_km;  // positivo = más rápido que media
+    const diffFmt = (diff > 0 ? '▲ ' : '▼ ') + fmtPaceJS(Math.abs(diff));
+    const diffColor = diff > 0 ? 'var(--accent3)' : '#ef4444';
+    yrHtml = `
+      <div class="modal-stat" style="margin-top:8px;grid-column:1/-1">
+        <span class="ms-key">vs media de ${{yr}} (todas distancias)</span>
+        <span class="ms-val" style="color:${{diffColor}}">${{diffFmt}} min/km</span>
+      </div>`;
+  }}
+
+  // Link a Strava
+  const stravaHtml = `<a class="modal-link" href="https://www.strava.com/activities/${{r.id}}" target="_blank" rel="noopener">
+    Ver en Strava ↗
+  </a>`;
+
+  document.getElementById('modalBody').innerHTML = `
+    <div class="modal-kpi-grid">${{kpiHtml}}</div>
+    <div class="modal-row">${{stats2Html}}${{yrHtml}}</div>
+    ${{perfHtml}}
+    ${{stravaHtml}}
+  `;
+
+  // Mostrar el mapa (si hay polyline)
+  showRunMap(r.polyline || '');
+
+  document.getElementById('modalOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}}
+
+function closeRunModal() {{
+  document.getElementById('modalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  // Destruir el mapa al cerrar para liberar memoria
+  if (_leafletMap) {{ _leafletMap.remove(); _leafletMap = null; }}
+  document.getElementById('runMapWrap').classList.remove('visible');
+}}
+
+// Cerrar con Escape (prioridad: modal de detalle → modal de país)
+document.addEventListener('keydown', e => {{
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('modalOverlay').classList.contains('open')) {{
+    closeRunModal();
+  }} else if (document.getElementById('countryModalOverlay').classList.contains('open')) {{
+    closeCountryModal();
+  }}
+}});
 </script>
 </body>
 </html>"""
 
-output_path = r"D:\BackUp Emi\Code\StravaApi\dashboard.html"
+output_path  = r"D:\BackUp Emi\Code\StravaApi\dashboard.html"
+index_path   = r"D:\BackUp Emi\Code\StravaApi\index.html"
+
 with open(output_path, "w", encoding="utf-8") as f:
     f.write(html)
+with open(index_path, "w", encoding="utf-8") as f:
+    f.write(html)
 print(f"Dashboard generado: {output_path}")
+
+# ── Auto-publicar en GitHub Pages (solo fuera de CI) ─────────
+import subprocess, os
+# En GitHub Actions el workflow hace el commit/push — aquí no tocamos git
+if os.environ.get("GITHUB_ACTIONS"):
+    print("CI detectado — git push omitido (lo hace el workflow)")
+else:
+    repo = r"D:\BackUp Emi\Code\StravaApi"
+    try:
+        subprocess.run(["git", "-C", repo, "add", "index.html"], check=True)
+        result = subprocess.run(["git", "-C", repo, "diff", "--cached", "--quiet"])
+        if result.returncode != 0:
+            from datetime import datetime as _dt
+            msg = f"Dashboard actualizado {_dt.now().strftime('%Y-%m-%d %H:%M')}"
+            subprocess.run(["git", "-C", repo, "commit", "-m", msg], check=True)
+            subprocess.run(["git", "-C", repo, "push", "origin", "main"], check=True)
+            print("Publicado en GitHub Pages correctamente")
+        else:
+            print("GitHub Pages: sin cambios, no se publica")
+    except Exception as e:
+        print(f"Aviso: no se pudo publicar en GitHub Pages: {e}")
