@@ -1,7 +1,11 @@
 import sqlite3
 import json
+import os
 import config
 from datetime import date, timedelta
+
+# Token para botón de sync manual (inyectado por GitHub Actions via secret)
+ACTIONS_TOKEN = os.environ.get("ACTIONS_TOKEN", "")
 
 def decode_polyline_first(poly):
     """Devuelve (lat, lng) del primer punto de un Google Encoded Polyline."""
@@ -365,9 +369,22 @@ h2{{font-size:.85rem;font-weight:600;color:var(--muted);text-transform:uppercase
   margin:32px 0 16px;padding-left:10px;
   border-left:3px solid var(--accent);
 }}
-.header{{display:flex;align-items:center;gap:16px;margin-bottom:28px;border-bottom:1px solid var(--border);padding-bottom:20px}}
+.header{{display:flex;align-items:center;gap:16px;margin-bottom:28px;border-bottom:1px solid var(--border);padding-bottom:20px;flex-wrap:wrap}}
 .header .logo{{font-size:2.2rem}}
 .header .sub{{color:var(--muted);font-size:.9rem;margin-top:2px}}
+.sync-btn{{
+  margin-left:auto;display:inline-flex;align-items:center;gap:8px;
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--text);border-radius:10px;padding:9px 18px;
+  font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s;
+  font-family:inherit;
+}}
+.sync-btn:hover:not(:disabled){{border-color:var(--accent);color:var(--accent)}}
+.sync-btn:disabled{{opacity:.6;cursor:not-allowed}}
+.sync-btn.syncing{{border-color:var(--accent2);color:var(--accent2)}}
+.sync-btn.done{{border-color:var(--accent3);color:var(--accent3)}}
+.sync-btn.error{{border-color:#ef4444;color:#ef4444}}
+.sync-status{{font-size:.75rem;color:var(--muted);margin-top:4px;text-align:right}}
 
 /* KPI grid */
 .kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:24px}}
@@ -570,6 +587,11 @@ tr.clickable:hover{{background:var(--surface2)!important;outline:1px solid var(-
     <h1>Dashboard Carreras · Emi</h1>
     <div class="sub">Datos desde 2016 · {stats['total_carreras']} actividades · Actualizado {date.today().strftime('%d/%m/%Y')}</div>
   </div>
+  {"" if not ACTIONS_TOKEN else '''
+  <div style="margin-left:auto;text-align:right">
+    <button id="syncBtn" class="sync-btn" onclick="triggerSync()">🔄 Sincronizar</button>
+    <div class="sync-status" id="syncStatus"></div>
+  </div>'''}
 </div>
 
 <!-- ═══ FILTROS ═══ -->
@@ -1514,6 +1536,92 @@ function closeRunModal() {{
   // Destruir el mapa al cerrar para liberar memoria
   if (_leafletMap) {{ _leafletMap.remove(); _leafletMap = null; }}
   document.getElementById('runMapWrap').classList.remove('visible');
+}}
+
+// ══════════════════════════════════════════════════════════════
+// BOTÓN SYNC MANUAL — GitHub Actions workflow_dispatch
+// ══════════════════════════════════════════════════════════════
+const GH_TOKEN    = {json.dumps(ACTIONS_TOKEN)};
+const GH_REPO     = 'Emiliofgarcia/carreras-dashboard';
+const GH_WORKFLOW = 'sync.yml';
+
+function sleep(ms) {{ return new Promise(r => setTimeout(r, ms)); }}
+
+async function triggerSync() {{
+  if (!GH_TOKEN) {{ alert('Token no configurado'); return; }}
+  const btn = document.getElementById('syncBtn');
+  const status = document.getElementById('syncStatus');
+  btn.disabled = true;
+  btn.className = 'sync-btn syncing';
+  btn.innerHTML = '⏳ Lanzando...';
+  status.textContent = '';
+
+  // 1. Disparar workflow
+  const t0 = Date.now();
+  const dispatch = await fetch(
+    `https://api.github.com/repos/${{GH_REPO}}/actions/workflows/${{GH_WORKFLOW}}/dispatches`,
+    {{
+      method: 'POST',
+      headers: {{
+        'Authorization': `Bearer ${{GH_TOKEN}}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      }},
+      body: JSON.stringify({{ ref: 'main' }})
+    }}
+  );
+
+  if (dispatch.status !== 204) {{
+    btn.className = 'sync-btn error'; btn.innerHTML = '❌ Error al lanzar';
+    status.textContent = `HTTP ${{dispatch.status}}`;
+    btn.disabled = false; return;
+  }}
+
+  // 2. Esperar a que aparezca el run (máx 30s)
+  btn.innerHTML = '⏳ Iniciando...';
+  let runId = null;
+  for (let i = 0; i < 10 && !runId; i++) {{
+    await sleep(3000);
+    const r = await fetch(
+      `https://api.github.com/repos/${{GH_REPO}}/actions/workflows/${{GH_WORKFLOW}}/runs?per_page=1`,
+      {{ headers: {{ 'Authorization': `Bearer ${{GH_TOKEN}}`, 'Accept': 'application/vnd.github.v3+json' }} }}
+    );
+    const data = await r.json();
+    const run = data.workflow_runs?.[0];
+    if (run && new Date(run.created_at).getTime() >= t0 - 5000) runId = run.id;
+  }}
+
+  if (!runId) {{
+    btn.className = 'sync-btn error'; btn.innerHTML = '❌ Timeout';
+    btn.disabled = false; return;
+  }}
+
+  // 3. Esperar a que termine (máx 5 min)
+  btn.innerHTML = '⏳ Sincronizando...';
+  status.textContent = 'Tarda ~1 minuto';
+  for (let i = 0; i < 30; i++) {{
+    await sleep(10000);
+    const r = await fetch(
+      `https://api.github.com/repos/${{GH_REPO}}/actions/runs/${{runId}}`,
+      {{ headers: {{ 'Authorization': `Bearer ${{GH_TOKEN}}`, 'Accept': 'application/vnd.github.v3+json' }} }}
+    );
+    const run = await r.json();
+    const elapsed = Math.round((Date.now() - t0) / 1000);
+    status.textContent = `${{run.status}} · ${{elapsed}}s`;
+    if (run.status === 'completed') {{
+      if (run.conclusion === 'success') {{
+        btn.className = 'sync-btn done'; btn.innerHTML = '✅ Listo — recargando...';
+        status.textContent = `Completado en ${{elapsed}}s`;
+        await sleep(2000); location.reload();
+      }} else {{
+        btn.className = 'sync-btn error'; btn.innerHTML = `❌ ${{run.conclusion}}`;
+        btn.disabled = false;
+      }}
+      return;
+    }}
+  }}
+  btn.className = 'sync-btn error'; btn.innerHTML = '❌ Timeout';
+  btn.disabled = false;
 }}
 
 // Cerrar con Escape (prioridad: modal de detalle → modal de país)
