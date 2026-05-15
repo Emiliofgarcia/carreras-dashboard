@@ -1637,14 +1637,15 @@ document.addEventListener('keydown', e => {{
 </body>
 </html>"""
 
-output_path  = r"D:\BackUp Emi\Code\StravaApi\dashboard.html"
-index_path   = r"D:\BackUp Emi\Code\StravaApi\index.html"
+_base        = os.path.dirname(os.path.abspath(__file__))
+output_path  = os.path.join(_base, "dashboard.html")
+index_path   = os.path.join(_base, "index.html")
 
 with open(output_path, "w", encoding="utf-8") as f:
     f.write(html)
 with open(index_path, "w", encoding="utf-8") as f:
     f.write(html)
-print(f"Dashboard generado: {output_path}")
+print(f"Dashboard generado: {index_path}")
 
 # ── Auto-publicar en GitHub Pages (solo fuera de CI) ─────────
 import subprocess, os
