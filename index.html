@@ -41,6 +41,15 @@ h2{font-size:.85rem;font-weight:600;color:var(--muted);text-transform:uppercase;
 .sync-btn.done{border-color:var(--accent3);color:var(--accent3)}
 .sync-btn.error{border-color:#ef4444;color:#ef4444}
 .sync-status{font-size:.75rem;color:var(--muted);margin-top:4px;text-align:right}
+.token-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center}
+.token-card{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:28px 32px;width:420px;max-width:90vw}
+.token-card h3{margin:0 0 8px;font-size:1.1rem}
+.token-card p{margin:0 0 16px;font-size:.85rem;color:var(--muted);line-height:1.5}
+.token-card input{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:.9rem;font-family:monospace;margin-bottom:14px}
+.token-card input:focus{outline:none;border-color:var(--accent)}
+.token-card-btns{display:flex;gap:10px;justify-content:flex-end}
+.token-card-btns button{padding:8px 18px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:.85rem;font-weight:600}
+.token-card-btns .btn-save{background:var(--accent);border-color:var(--accent);color:#000}
 
 /* KPI grid */
 .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:24px}
@@ -1233,18 +1242,42 @@ const GH_WORKFLOW = 'sync.yml';
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function getToken() {
-  let t = localStorage.getItem('gh_sync_token');
-  if (!t) {
-    t = prompt('Introduce tu GitHub Personal Access Token (Actions:write):
-(Se guardará en tu navegador, no en el código)');
-    if (!t) return null;
-    localStorage.setItem('gh_sync_token', t.trim());
-  }
-  return t.trim();
+  return localStorage.getItem('gh_sync_token') || null;
+}
+
+function showTokenModal() {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'token-modal';
+    overlay.innerHTML = `
+      <div class="token-card">
+        <h3>🔑 GitHub Token</h3>
+        <p>Introduce tu Personal Access Token con permiso <b>Actions: write</b>.<br>
+           Se guarda solo en tu navegador, nunca en el código.</p>
+        <input id="tokenInput" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off"/>
+        <div class="token-card-btns">
+          <button onclick="this.closest('.token-modal').remove();document.removeEventListener('keydown',_tkEsc);">Cancelar</button>
+          <button class="btn-save" onclick="
+            const v=document.getElementById('tokenInput').value.trim();
+            if(!v)return;
+            localStorage.setItem('gh_sync_token',v);
+            this.closest('.token-modal').remove();
+            document.removeEventListener('keydown',_tkEsc);
+            window._tokenResolve(v);
+          ">Guardar y sincronizar</button>
+        </div>
+      </div>`;
+    window._tokenResolve = resolve;
+    function _tkEsc(e){ if(e.key==='Escape'){ overlay.remove(); document.removeEventListener('keydown',_tkEsc); resolve(null); } }
+    document.addEventListener('keydown', _tkEsc);
+    document.body.appendChild(overlay);
+    setTimeout(()=>document.getElementById('tokenInput')?.focus(), 50);
+  });
 }
 
 async function triggerSync() {
-  const GH_TOKEN = getToken();
+  let GH_TOKEN = getToken();
+  if (!GH_TOKEN) { GH_TOKEN = await showTokenModal(); }
   if (!GH_TOKEN) return;
   const btn = document.getElementById('syncBtn');
   const status = document.getElementById('syncStatus');
