@@ -4,8 +4,6 @@ import os
 import config
 from datetime import date, timedelta
 
-# Token para botón de sync manual (inyectado por GitHub Actions via secret)
-ACTIONS_TOKEN = os.environ.get("GH_SYNC_TOKEN", "")
 
 def decode_polyline_first(poly):
     """Devuelve (lat, lng) del primer punto de un Google Encoded Polyline."""
@@ -587,11 +585,10 @@ tr.clickable:hover{{background:var(--surface2)!important;outline:1px solid var(-
     <h1>Dashboard Carreras · Emi</h1>
     <div class="sub">Datos desde 2016 · {stats['total_carreras']} actividades · Actualizado {date.today().strftime('%d/%m/%Y')}</div>
   </div>
-  {"" if not ACTIONS_TOKEN else '''
   <div style="margin-left:auto;text-align:right">
     <button id="syncBtn" class="sync-btn" onclick="triggerSync()">🔄 Sincronizar</button>
     <div class="sync-status" id="syncStatus"></div>
-  </div>'''}
+  </div>
 </div>
 
 <!-- ═══ FILTROS ═══ -->
@@ -1540,15 +1537,26 @@ function closeRunModal() {{
 
 // ══════════════════════════════════════════════════════════════
 // BOTÓN SYNC MANUAL — GitHub Actions workflow_dispatch
+// Token guardado en localStorage (nunca en el HTML)
 // ══════════════════════════════════════════════════════════════
-const GH_TOKEN    = {json.dumps(ACTIONS_TOKEN)};
 const GH_REPO     = 'Emiliofgarcia/carreras-dashboard';
 const GH_WORKFLOW = 'sync.yml';
 
 function sleep(ms) {{ return new Promise(r => setTimeout(r, ms)); }}
 
+function getToken() {{
+  let t = localStorage.getItem('gh_sync_token');
+  if (!t) {{
+    t = prompt('Introduce tu GitHub Personal Access Token (Actions:write):\n(Se guardará en tu navegador, no en el código)');
+    if (!t) return null;
+    localStorage.setItem('gh_sync_token', t.trim());
+  }}
+  return t.trim();
+}}
+
 async function triggerSync() {{
-  if (!GH_TOKEN) {{ alert('Token no configurado'); return; }}
+  const GH_TOKEN = getToken();
+  if (!GH_TOKEN) return;
   const btn = document.getElementById('syncBtn');
   const status = document.getElementById('syncStatus');
   btn.disabled = true;
