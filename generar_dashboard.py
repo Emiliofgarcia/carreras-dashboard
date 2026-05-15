@@ -5,7 +5,7 @@ import config
 from datetime import date, timedelta
 
 # Token para botón de sync manual (inyectado por GitHub Actions via secret)
-ACTIONS_TOKEN = os.environ.get("ACTIONS_TOKEN", "")
+ACTIONS_TOKEN = os.environ.get("GH_SYNC_TOKEN", "")
 
 def decode_polyline_first(poly):
     """Devuelve (lat, lng) del primer punto de un Google Encoded Polyline."""
