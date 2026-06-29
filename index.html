@@ -250,7 +250,7 @@ tr.clickable:hover{background:var(--surface2)!important;outline:1px solid var(--
   <div class="logo">🏃</div>
   <div>
     <h1>Dashboard Carreras · Emi</h1>
-    <div class="sub">Datos desde 2016 · 1714 actividades · Actualizado 28/06/2026</div>
+    <div class="sub">Datos desde 2016 · 1714 actividades · Actualizado 29/06/2026</div>
   </div>
   <div style="margin-left:auto;text-align:right">
     <button id="syncBtn" class="sync-btn" onclick="triggerSync()">🔄 Sincronizar</button>
@@ -332,12 +332,12 @@ tr.clickable:hover{background:var(--surface2)!important;outline:1px solid var(--
   </div>
   <div class="kpi accent4">
     <div class="label">Racha activa</div>
-    <div class="value">11</div>
+    <div class="value">0</div>
     <div class="unit">semanas consecutivas</div>
   </div>
   <div class="kpi accent3">
     <div class="label">Km/semana</div>
-    <div class="value">21.1</div>
+    <div class="value">19.3</div>
     <div class="unit">media últimas 4 sem</div>
   </div>
 </div>
@@ -347,20 +347,20 @@ tr.clickable:hover{background:var(--surface2)!important;outline:1px solid var(--
 <div class="forma-grid">
   <div class="forma-card">
     <div class="label">Km totales</div>
-    <div class="value" style="color:var(--accent)">84.2 km</div>
-    <div class="compare">Antes: 68.0 km &nbsp;<span style="color:+23.8%">#22c55e</span></div>
+    <div class="value" style="color:var(--accent)">77.2 km</div>
+    <div class="compare">Antes: 75.1 km &nbsp;<span style="color:+2.8%">#22c55e</span></div>
   </div>
   <div class="forma-card">
     <div class="label">Ritmo medio</div>
     <div class="value" style="color:var(--accent2)">5:56</div>
-    <div class="compare">Antes: 5:47 &nbsp;<span style="color:#f97316">+2.6% más lento</span></div>
+    <div class="compare">Antes: 5:47 &nbsp;<span style="color:#f97316">+2.8% más lento</span></div>
   </div>
   <div class="forma-card">
     <div class="label">Carreras</div>
-    <div class="value" style="color:var(--accent3)">11</div>
-    <div class="compare">Antes: 9 &nbsp;
+    <div class="value" style="color:var(--accent3)">10</div>
+    <div class="compare">Antes: 10 &nbsp;
       <span style="color:#22c55e">
-        ↑ 2
+        ↑ 0
       </span>
     </div>
   </div>
@@ -605,9 +605,9 @@ const FC_V=    [160.0, 154.0, 150.0, 147.0, 144.0, 143.0, 140.0, 141.0, 143.0, 1
 const EF_L=    ["2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-04", "2026-05", "2026-06"];
 const EF_V=    [129.66, 121.02, 127.01, 127.06, 125.38, 125.59, 122.56, 126.95, 127.03, 121.34, 122.07, 122.11, 125.42, 125.41, 127.03, 125.74, 123.52, 124.6, 123.29, 123.95, 126.09, 117.02, 120.07, 117.4];
 
-const CONS_L=  ["2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-04", "2026-05", "2026-06"];
-const CONS_SEM=[1, 4, 5, 5, 4, 5, 4, 5, 5, 4, 3, 5, 4];
-const CONS_KM= [6.4, 85.0, 84.3, 139.7, 90.5, 103.4, 91.1, 121.6, 122.8, 91.5, 34.7, 88.4, 77.2];
+const CONS_L=  ["2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-04", "2026-05", "2026-06"];
+const CONS_SEM=[4, 5, 5, 4, 5, 4, 5, 5, 4, 3, 5, 4];
+const CONS_KM= [85.0, 84.3, 139.7, 90.5, 103.4, 91.1, 121.6, 122.8, 91.5, 34.7, 88.4, 77.2];
 
 const FL=      ["< 5 km", "5\u20138 km", "8\u201312 km", "12\u201317 km", "17\u201322 km", "> 22 km"];
 const FC_CNT=  [180, 659, 550, 206, 80, 39];
